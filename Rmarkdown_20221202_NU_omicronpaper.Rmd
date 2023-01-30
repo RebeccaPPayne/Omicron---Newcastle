@@ -1,0 +1,288 @@
+---
+title: "NU tet pos omicron analysis - hetero and haplo responses included - NU"
+author: "Rebecca Payne"
+date: "17/01/2023"
+output: html_document
+---
+Analysis of the dominant antigen specific responses from three batches. Samples are either stained for EBV-APC, or Spike/non Spike- PE responses. 
+
+Fcs pre-gated on live, CD3+CD8+Tetramer+ events
+
+Premessa processing removed unwanted parameters including CD3, CD8, CD4 and Tetramers.
+
+A cut-off of 0.01% or less than 10 events applied during this script and added to the metadata file.
+
+repeat to removeAz sample 10065 - only Pfizer
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r include=FALSE}
+library(readxl) 
+library(CATALYST)
+library(cowplot)
+library(flowCore)
+library(scater)
+library(SingleCellExperiment)
+library(openxlsx)
+library(ggpubr)
+```
+
+
+### Create SCE and use FLOWSom to identify monocytes
+Load  FCS files (processed), metadata, panel and create flowset
+
+```{r}
+md <- "metadata_aurora_test_omicron.xlsx" 
+md <- read_excel(md)       
+head(data.frame(md)) 
+```
+
+
+```{r}
+fs <- read.flowSet(md$file_name, transformation = F, truncate_max_range = F)
+```
+
+```{r}
+panel <- "Panel_aurora_test.xlsx" 
+panel <- read_excel(panel)                                         
+head(data.frame(panel),30) 
+```
+
+
+```{r}
+all(panel$fcs_colname %in% colnames(fs))
+```
+
+```{r}
+setdiff(fs@frames$SIREN10004_EOI_EBV_J.fcs@parameters@data$desc,panel$antigen)
+```
+
+
+```{r}
+md$infection <- factor(md$infection, levels = c("pre_omicron", "post_omicron"))      
+
+md$batch <- factor(md$batch, levels = c("batch1", "batch2","batch3" ))
+
+md$antigen <- factor(md$antigen, levels = c("Spike", "Non_Spike", "EBV" ))
+
+md$hla <- factor(md$hla, levels = c("A0201", "A0301", "B0702", "A0101"))
+
+md$serostatus <- factor(md$serostatus, levels = c("previously_infected", "naive"))
+
+md$cut_off_10 <- factor(md$cut_off_10, levels = c("yes", "no"))
+
+md$cut_off_40 <- factor(md$cut_off_40, levels = c("yes", "no"))
+
+md$condition <- factor(md$condition, levels = c("pre_omicron_spike_naive", "post_omicron_spike_naive", "pre_omicron_spike_previously_infected", "post_omicron_spike_previously_infected", "post_omicron_nonspike_naive", "pre_omicron_nonspike_previously_infected", "post_omicron_nonspike_previously_infected",  "pre_omicron_EBV", "post_omicron_EBV"))
+
+
+md$sample_id <- factor(md$sample_id, levels = md$sample_id[order(md$condition)])  
+```
+
+
+```{asis, echo = TRUE}
+# see ?prepdata for notes on the sce. Aurora flow analysis needs a different cofactor applied. We have chosen 150. Also need to specify FACE = TRUE for flow data.
+```
+
+```{r}
+sce <- prepData(fs, panel, md, transform = TRUE, cofactor = 150, FACS = TRUE, features = panel$fcs_colname, md_cols = list(file = "file_name", id = "sample_id", factors = c("batch", "condition", "antigen", "hla", "serostatus", "cut_off_10", "infection")))
+
+```
+
+
+
+## Overview analysis of Cytof data
+
+```{r}
+n_cells(sce)
+```
+
+```{r fig.width= 10}
+plotCounts(sce, color_by = "antigen")
+```
+
+## export n_cells to add to metadata for cut_off
+```{r}
+n_cells <- table(sample = sce$sample_id)
+write.xlsx(n_cells, "n_cells.xlsx")
+```
+
+## iterate and add n_cells to table and metadata - clear environment and re-run
+## FILTER sce to remove cut_off - cut_off = less than 0.01% (rounded-up) and/or less than 10 events
+
+```{r}
+sce_cutoff_10 <- filterSCE(sce, cut_off_10 == "yes")
+```
+
+
+```{r}
+n_cells(sce_cutoff_10)
+```
+
+
+```{r fig.width= 10}
+plotCounts(sce_cutoff_10, color_by = "hla")
+```
+
+
+
+```{r fig.width= 5}
+plotNRS(sce_cutoff_10, features = type_markers(sce_cutoff_10), color_by = "condition")
+```
+
+
+
+## Clustering of fcs files with over 0.01% of CD8 (or more than 10 events) tetramer positive events  
+
+Cluster FLOWSom analysis - max 10 clusters <br/>
+
+For reproducibility set random seed
+```{r}
+set.seed(5678)
+sce_cutoff_10 <- cluster(sce_cutoff_10, features = NULL, 
+               xdim = 10, ydim = 10, maxK = 10, 
+               verbose = FALSE, seed = 4321) 
+```
+
+
+
+### sce_all : Cluster of sce on type AND state markers; using features = NULL
+Cluster FLOWSom analysis - max 10 clusters <br/> cluster on "type" markers for memory phenotyping
+
+
+
+
+```{r fig.width=4}
+pbMDS(sce_cutoff_10, shape_by = "antigen", size_by = TRUE, label_by = NULL)
+```
+
+## Dimension reduction - UMAP
+```{r}
+set.seed(4321)
+sce_cutoff_10 <- runDR(sce_cutoff_10, dr = "UMAP", cells = 500, features = NULL)
+```
+
+```{r}
+plotDR(sce_cutoff_10, "UMAP", color_by = "meta10")
+
+```
+
+
+
+
+
+## 28.11.2022 Group data in sce_all into three groups
+
+## group_a - pre_omicron - only pre_omicron samples 
+## group_b - spike only samples
+## group_c - nonspike only 
+
+```{r}
+sce_cutoff_10_groupa <- filterSCE(sce_cutoff_10, infection == "pre_omicron")
+```
+
+
+```{r}
+sce_cutoff_10_groupb <- filterSCE(sce_cutoff_10, antigen == "Spike")
+```
+
+
+```{r}
+sce_cutoff_10_groupc <- filterSCE(sce_cutoff_10, antigen == "Non_Spike")
+```
+
+## Plots of UMAP based on FLowSOM clustering and DR on sce_all (all markers inc type and state)
+
+```{r}
+plotDR(sce_cutoff_10, "UMAP", color_by = "condition")
+
+```
+
+
+```{r}
+plotDR(sce_cutoff_10_groupa, "UMAP", color_by = "condition")
+
+```
+
+```{r}
+plotDR(sce_cutoff_10_groupb, "UMAP", color_by = "condition")
+
+```
+
+```{r}
+plotDR(sce_cutoff_10_groupc, "UMAP", color_by = "condition")
+
+```
+## Heatmaps
+
+
+```{r fig.width=7, fig.height=5}
+plotExprHeatmap(sce_cutoff_10, features = NULL, 
+    scale = "last", q = 0, bars = FALSE, row_anno = c("condition", "hla"), row_clust = FALSE)
+```
+
+
+```{r fig.width=7, fig.height=5}
+plotExprHeatmap(sce_cutoff_10_groupa, features = NULL, 
+    scale = "last", q = 0, bars = FALSE, row_anno = c("condition", "hla"), row_clust = FALSE)
+```
+
+```{r fig.width=7, fig.height=5}
+plotExprHeatmap(sce_cutoff_10_groupb, features = NULL, 
+    scale = "last", q = 0, bars = FALSE, row_anno = c("condition", "hla"), row_clust = FALSE)
+```
+
+```{r fig.width=7, fig.height=5}
+plotExprHeatmap(sce_cutoff_10_groupc, features = NULL, 
+    scale = "last", q = 0, bars = FALSE, row_anno = c("condition", "hla"), row_clust = FALSE)
+```
+
+# Marker expression 
+
+pre_omicron_spike_naive", "post_omicron_spike_naive", "pre_omicron_spike_conv", "post_omicron_spike_conv", "post_omicron_nonspike_naive", "pre_omicron_nonspike_conv", "post_omicron_nonspike_conv",  "pre_omicron_EBV", "post_omicron_EBV
+
+```{r}
+my_comparisons_groupa <- list(  c("pre_omicron_spike_naive", "pre_omicron_spike_previously_infected"), c("pre_omicron_spike_naive", "pre_omicron_nonspike_previously_infected"), c("pre_omicron_spike_naive", "pre_omicron_EBV"), c("pre_omicron_spike_previously_infected", "pre_omicron_nonspike_previously_infected"), c("pre_omicron_spike_previously_infected", "pre_omicron_EBV"), c("pre_omicron_nonspike_previousy_infected","pre_omicron_EBV" ))
+```
+
+```{r fig.height=8}
+plotPbExprs(sce_cutoff_10_groupa, features=NULL, facet_by = "antigen", ncol = 3) + stat_compare_means(label.y = -3) + stat_compare_means(method = "t.test", ref.group = ".all." )
+```
+
+```{r fig.width=5}
+plotPbExprs(sce_cutoff_10_groupa, features=NULL, facet_by = "antigen", ncol = 3) 
+```
+
+```{r fig.height= 8}
+plotPbExprs(sce_cutoff_10_groupb, features=NULL, facet_by = "antigen", ncol = 3 ) + stat_compare_means(label.y = -3) + stat_compare_means(method = "t.test", ref.group = ".all." )
+```
+
+
+```{r fig.width=5}
+plotPbExprs(sce_cutoff_10_groupb, features=NULL, facet_by = "antigen", ncol = 3) 
+```
+
+```{r fig.height=8}
+plotPbExprs(sce_cutoff_10_groupc, features=NULL, facet_by = "antigen", ncol = 3) +  stat_compare_means(label.y = -3) + stat_compare_means(method = "t.test", ref.group = ".all." )
+```
+
+
+
+```{r fig.width=5}
+plotPbExprs(sce_cutoff_10_groupc, features=NULL, facet_by = "antigen", ncol = 3) 
+```
+
+```{r}
+sessionInfo()
+```
+
+
+
+
+
+
+
+
+
