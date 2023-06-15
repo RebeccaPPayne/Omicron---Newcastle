@@ -4,7 +4,7 @@ author: "Rebecca Payne"
 date: "17/01/2023"
 output: html_document
 ---
-Analysis of the dominant antigen specific responses from three batches. Samples are either stained for EBV-APC, or Spike/non Spike- PE responses. 
+Analysis of the antigen specific responses from three batches. Samples are either stained for EBV-APC, or Spike/non Spike- PE responses. 
 
 Fcs pre-gated on live, CD3+CD8+Tetramer+ events
 
